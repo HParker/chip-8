@@ -1,40 +1,74 @@
 extern crate minifb;
-use minifb::{Key, KeyRepeat, Window, WindowOptions};
-use std::num::Wrapping;
+use minifb::{Key, Window, WindowOptions};
+use rand::prelude::*;
+// use std::num::Wrapping;
 
 const WIDTH: usize = 64;
 const HEIGHT: usize = 32;
 
-pub struct Keyboard {
-    key_pressed: Option<u8>,
+pub struct KeyPad {
+    keys: [bool; 16],
 }
 
-
-impl Keyboard {
-    pub fn new() -> Keyboard {
-        Keyboard { key_pressed: None }
+impl Default for KeyPad {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    //Todo implement proper key handling
-    pub fn is_key_pressed(&self, key_code: u8) -> bool {
-        if let Some(key) = self.key_pressed {
-            key == key_code
-        } else {
-            false
+impl KeyPad {
+    pub fn new() -> KeyPad {
+        KeyPad {
+            keys: [
+                false, false, false, false,
+                false, false, false, false,
+                false, false, false, false,
+                false, false, false, false,
+            ]
         }
     }
 
-    pub fn set_key_pressed(&mut self, key: Option<u8>) {
-        self.key_pressed = key;
+    pub fn update_keys(&mut self, keys: Vec<Key>) {
+        self.keys.iter_mut().for_each(|m| *m = false);
+        for key in keys {
+            match key {
+                Key::Key1 => { self.keys[0x1] = true }
+                Key::Key2 => { self.keys[0x2] = true }
+                Key::Key3 => { self.keys[0x3] = true }
+                Key::Key4 => { self.keys[0xC] = true }
+
+                Key::Q => { self.keys[0x4] = true }
+                Key::W => { self.keys[0x5] = true }
+                Key::E => { self.keys[0x6] = true }
+                Key::R => { self.keys[0xD] = true }
+
+                Key::A => { self.keys[0x7] = true }
+                Key::S => { self.keys[0x8] = true }
+                Key::D => { self.keys[0x9] = true }
+                Key::F => { self.keys[0xE] = true }
+
+                Key::Z => { self.keys[0xA] = true }
+                Key::X => { self.keys[0x0] = true }
+                Key::C => { self.keys[0xB] = true }
+                Key::V => { self.keys[0xF] = true }
+                _ => { } // ignore all other keys
+            }
+        }
     }
 
-    pub fn get_key_pressed(&self) -> Option<u8> {
-        self.key_pressed
+    pub fn is_key_pressed(&self, key_code: u8) -> bool {
+        self.keys[key_code as usize]
     }
 }
 
 pub struct Display {
     screen: [u8; WIDTH * HEIGHT],
+}
+
+impl Default for Display {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Display {
@@ -48,7 +82,7 @@ impl Display {
         y * WIDTH + x
     }
 
-    pub fn debug_draw_byte(&mut self, byte: u8, x: u8, y: u8) -> bool {
+    pub fn draw(&mut self, byte: u8, x: u8, y: u8) -> bool {
         let mut erased = false;
         let mut coord_x = x as usize;
         let mut coord_y = y as usize;
@@ -92,8 +126,9 @@ struct Chip8 {
     delay_timer: u8,
     stack: Vec<u16>,
     screen: Display,
-    keyboard: Keyboard,
-    memory: [u8; 4096]
+    keypad: KeyPad,
+    memory: [u8; 4096],
+    draw: bool
 }
 
 // screen 63,31
@@ -137,8 +172,9 @@ impl Chip8 {
             screen: Display::new(),
             delay_timer: 0,
             sound_timer: 0,
-            memory: memory,
-            keyboard: Keyboard::new()
+            memory,
+            keypad: KeyPad::new(),
+            draw: false
         }
     }
 
@@ -163,7 +199,7 @@ impl Chip8 {
         let n = (instruction & 0x00F) as u8;
         let x = ((instruction & 0x0F00) >> 8) as u8;
         let y = ((instruction & 0x00F0) >> 4) as u8;
-        match ((instruction & 0xF000) >> 12) {
+        match (instruction & 0xF000) >> 12 {
             0x0 => {
                 match nn {
                     0xE0 => {
@@ -175,7 +211,7 @@ impl Chip8 {
                         let addr = self.stack.pop().unwrap();
                         self.pc = addr;
                     }
-                    _ => panic!(
+                    _ => unreachable!(
                         "Unrecognized 0x00** instruction {:#X}:{:#X}",
                         self.pc,
                         instruction
@@ -249,9 +285,9 @@ impl Chip8 {
                         let result = vx.overflowing_add(vy);
                         self.vx[x as usize] = result.0;
                         if result.1 {
-                            self.vx[0xF as usize] = 1;
+                            self.vx[0xF_usize] = 1;
                         } else {
-                            self.vx[0xF as usize] = 0;
+                            self.vx[0xF_usize] = 0;
                         }
                         self.pc += 2;
                     }
@@ -261,14 +297,38 @@ impl Chip8 {
                         let result = vx.overflowing_sub(vy);
                         self.vx[x as usize] = result.0;
                         if result.1 {
-                            self.vx[0xF as usize] = 0;
+                            self.vx[0xF_usize] = 0;
                         } else {
-                            self.vx[0xF as usize] = 1;
+                            self.vx[0xF_usize] = 1;
                         }
                         self.pc += 2;
                     }
+                    6 => {
+                        let lsb = self.vx[y as usize] & 1;
+                        self.vx[x as usize] >>= 1;
+                        self.vx[0xF_usize] = lsb;
+                        self.pc += 2;
+                    }
+                    7 => {
+                        let vx = self.vx[x as usize];
+                        let vy = self.vx[y as usize];
+                        let result = vy.overflowing_sub(vx);
+                        self.vx[x as usize] = result.0;
+                        if result.1 {
+                            self.vx[0xF_usize] = 0;
+                        } else {
+                            self.vx[0xF_usize] = 1;
+                        }
+                        self.pc += 2;
+                    }
+                    0xE => {
+                        let msb = self.vx[x as usize] >> 7 & 0x1;
+                        self.vx[x as usize] <<= 1;
+                        self.vx[0xF_usize] = msb;
+                        self.pc += 2;
+                    }
                     _ => {
-                        panic!("MORE WORK")
+                        unreachable!();
                     }
                 }
 
@@ -285,26 +345,29 @@ impl Chip8 {
                 self.pc +=2;
             }
             0xC => {
-                // TODO: actually generate a random number
-                self.vx[x as usize] = 0 & nn;
+                // TODO: store the rng generator
+                let mut rng = rand::thread_rng();
+                let r: u8 = rng.gen();
+
+                self.vx[x as usize] = r & nn;
                     self.pc += 2
             }
             0xD => {
-                self.debug_draw_sprite(self.vx[x as usize], self.vx[y as usize], n);
+                self.draw_sprite(self.vx[x as usize], self.vx[y as usize], n);
                 self.pc +=2;
             }
             0xE => {
                 // TODO: actually check if something is pressed down
                 match nn {
                     0x9E => {
-                        if self.keyboard.is_key_pressed(self.vx[x as usize]) {
+                        if self.keypad.is_key_pressed(self.vx[x as usize]) {
                             self.pc += 4;
                         } else{
                             self.pc += 2;
                         }
                     }
                     0xA1 => {
-                        if self.keyboard.is_key_pressed(self.vx[x as usize]) {
+                        if self.keypad.is_key_pressed(self.vx[x as usize]) {
                             self.pc += 2;
                         } else{
                             self.pc += 4;
@@ -349,23 +412,23 @@ impl Chip8 {
                     }
                     0x65 => {
                         for i in 0..x + 1 {
-                            self.vx[i as usize] = self.memory[(self.i as u16 + i as u16) as usize];
+                            self.vx[i as usize] = self.memory[(self.i + i as u16) as usize];
                         }
                         self.i += x as u16 + 1;
                         self.pc += 2;
                     }
                     0x1E => {
-                        self.i = self.i + self.vx[x as usize] as u16;
+                        self.i += self.vx[x as usize] as u16;
+                        self.pc += 2
                     }
                     _ => {
-                        panic!("Unrecognized instruction {:#x}", instruction);
-                        self.pc += 2;
+                        unreachable!("Unrecognized instruction {:#x}", instruction);
                     }
                 }
             }
 
             _ => {
-                panic!("Unrecognized instruction {:#x}", instruction);
+                unreachable!("Unrecognized instruction {:#x}", instruction);
             }
         }
         if self.delay_timer > 0 {
@@ -379,13 +442,14 @@ impl Chip8 {
     }
 
     fn get_display_buffer(&mut self) -> [u8; HEIGHT * WIDTH] {
-        return self.screen.screen;
+        self.screen.screen
     }
 
-    fn debug_draw_sprite(&mut self, x: u8, y: u8, height: u8) {
+    fn draw_sprite(&mut self, x: u8, y: u8, height: u8) {
+        self.draw = true;
         let mut erased = false;
         for yp in 0..height {
-            erased = self.screen.debug_draw_byte(self.memory[(self.i + yp as u16) as usize], x, y + yp);
+            erased = self.screen.draw(self.memory[(self.i + yp as u16) as usize], x, y + yp);
         }
         if erased {
             self.vx[0xF] = 1;
@@ -393,50 +457,21 @@ impl Chip8 {
             self.vx[0xF] = 0;
         }
     }
-
-    fn debug(&mut self) {
-        println!("Vx: {:?}", self.vx);
-        println!("pc: {:?}", self.pc);
-        println!("dt: {:?}", self.delay_timer);
-        println!(" i: {:?}", self.i);
-    }
 }
 
 use std::fs::File;
 use std::io::Read;
-use std::{thread, time};
-use std::time::{Duration, Instant};
-
-fn get_chip8_keycode_for(key: Option<Key>) -> Option<u8> {
-    match key {
-        Some(Key::Key1) => Some(0x1),
-        Some(Key::Key2) => Some(0x2),
-        Some(Key::Key3) => Some(0x3),
-        Some(Key::Key4) => Some(0xC),
-
-        Some(Key::Q) => Some(0x4),
-        Some(Key::W) => Some(0x5),
-        Some(Key::E) => Some(0x6),
-        Some(Key::R) => Some(0xD),
-
-        Some(Key::A) => Some(0x7),
-        Some(Key::S) => Some(0x8),
-        Some(Key::D) => Some(0x9),
-        Some(Key::F) => Some(0xE),
-
-        Some(Key::Z) => Some(0xA),
-        Some(Key::X) => Some(0x0),
-        Some(Key::C) => Some(0xB),
-        Some(Key::V) => Some(0xF),
-        _ => None,
-    }
-}
+// use std::{thread, time};
+// use std::time::{Duration, Instant};
 
 fn main() {
-    // let mut file = File::open("roms/test_opcode.ch8").unwrap();
-    let mut file = File::open("roms/MERLIN").unwrap();
+    let mut file = File::open("../roms/keypad.ch8").unwrap();
     let mut data = Vec::<u8>::new();
-    file.read_to_end(&mut data);
+    match file.read_to_end(&mut data) {
+        Ok(_size) => {  }
+        Err(err) => { panic!("failed to read file {}", err); }
+    }
+
     let mut chip8 = Chip8::new();
 
     let width = 640;
@@ -456,34 +491,21 @@ fn main() {
 
     chip8.load_program(data);
 
-    let mut last_instruction_run_time = Instant::now();
-    let mut last_key_update_time = Instant::now();
+    // Limit to max ~60 fps update rate
+    // window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        let keys_pressed = window.get_keys_pressed(KeyRepeat::Yes);
-        let key = match keys_pressed {
-            Some(keys) => if !keys.is_empty() {
-                Some(keys[0])
-            } else {
-                None
-            },
-            None => None,
-        };
-
-        let chip8_key = get_chip8_keycode_for(key);
-        if chip8_key.is_some()
-            || Instant::now() - last_key_update_time >= Duration::from_millis(200)
-        {
-            last_key_update_time = Instant::now();
-            chip8.keyboard.set_key_pressed(chip8_key);
+        if chip8.draw == false {
+            let keys = window.get_keys();
+            chip8.keypad.update_keys(keys);
+            chip8.step();
         }
 
-        if Instant::now() - last_instruction_run_time > Duration::from_millis(2) {
-            chip8.step();
-            last_instruction_run_time = Instant::now();
+        
+        let chip8_buffer = chip8.get_display_buffer();
 
-            let chip8_buffer = chip8.get_display_buffer();
-
+        if chip8.draw {
+            chip8.draw = false;
             for y in 0..height {
                 let y_coord = y / 10;
                 let offset = y * width;
@@ -505,11 +527,12 @@ fn main() {
                         };
                         buffer[offset + x] = color_pixel;
                     }
-
-
                 }
             }
-            window.update_with_buffer(&buffer);
+        }
+        match window.update_with_buffer(&buffer, width, height) {
+            Ok(_) => {}
+            Err(err) => { panic!("failed to update window {}", err); }
         }
     }
 }

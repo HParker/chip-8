@@ -1,0 +1,1 @@
+gcc -O3 -D_THREAD_SAFE -I/usr/local/include -I/usr/local/include/SDL2 -L/usr/local/lib -lSDL2 main.c && ./a.out
